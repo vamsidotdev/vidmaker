@@ -91,7 +91,6 @@ interface CaptionStyleConfig {
 
 interface CaptionWindowCue extends CaptionCue {
   isActive: boolean
-  activeProgress: number
 }
 
 const DB_NAME = 'vidmaker-db'
@@ -104,8 +103,7 @@ const PX_PER_SECOND = 60
 const TIMELINE_LABEL_WIDTH = 72
 const MIN_CLIP_DURATION = 0.2
 const CAPTION_WINDOW_WORD_COUNT = 3
-const CAPTION_HIGHLIGHT_COLOR = '#FACC15'
-const CAPTION_JUMP_MAX_PX = 16
+const CAPTION_ACTIVE_BG_COLOR = '#7C3AED'
 const CAPTION_SIZE_MIN = 50
 const CAPTION_SIZE_MAX = 220
 
@@ -1091,54 +1089,53 @@ function getCaptionWindowForTime(time: number): CaptionWindowCue[] {
 
   return captions.value.slice(start, end).map((cue, index) => ({
     ...cue,
-    isActive: start + index === activeIndex,
-    activeProgress: start + index === activeIndex
-      ? Math.min(1, Math.max(0, (time - cue.start) / Math.max(0.001, cue.end - cue.start)))
-      : 0
+    isActive: start + index === activeIndex
   }))
 }
 
-function getCaptionJumpOffset(progress: number): number {
-  if (progress <= 0 || progress >= 1) {
-    return 0
-  }
-  if (progress <= 0.22) {
-    return CAPTION_JUMP_MAX_PX * (progress / 0.22)
-  }
-  if (progress <= 0.52) {
-    return CAPTION_JUMP_MAX_PX * (1 - ((progress - 0.22) / 0.3))
-  }
-  if (progress <= 0.72) {
-    return -3 * Math.sin(((progress - 0.52) / 0.2) * Math.PI)
-  }
-  return 0
-}
-
-function getCaptionPopScale(progress: number): number {
-  if (progress <= 0 || progress >= 1) {
-    return 1
-  }
-  if (progress <= 0.18) {
-    return 1 + (0.22 * (progress / 0.18))
-  }
-  if (progress <= 0.42) {
-    return 1.22 - (0.24 * ((progress - 0.18) / 0.24))
-  }
-  if (progress <= 0.62) {
-    return 0.98 + (0.02 * ((progress - 0.42) / 0.2))
-  }
-  return 1
-}
-
 function getPreviewCaptionWordStyle(cue: CaptionWindowCue): Record<string, string> {
-  const jumpOffset = cue.isActive ? getCaptionJumpOffset(cue.activeProgress) : 0
-  const popScale = cue.isActive ? getCaptionPopScale(cue.activeProgress) : 1
-  return {
-    transform: `translateY(-${jumpOffset.toFixed(2)}px) scale(${popScale.toFixed(3)})`,
-    textShadow: cue.isActive
-      ? '0 0 12px rgba(250, 204, 21, 0.45), 0 2px 6px rgba(0, 0, 0, 0.9)'
-      : '0 2px 6px rgba(0, 0, 0, 0.9)'
+  if (cue.isActive) {
+    return {
+      backgroundColor: CAPTION_ACTIVE_BG_COLOR,
+      color: '#FFFFFF',
+      WebkitTextStroke: '0px transparent',
+      boxShadow: '0 4px 14px rgba(124, 58, 237, 0.45)'
+    }
   }
+
+  return {
+    backgroundColor: 'transparent'
+  }
+}
+
+function getFontPixelSize(font: string): number {
+  const match = font.match(/(\d+(?:\.\d+)?)px/)
+  if (!match) {
+    return 48
+  }
+  return Number(match[1]) || 48
+}
+
+function drawRoundedRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number
+): void {
+  const safeRadius = Math.max(0, Math.min(radius, width / 2, height / 2))
+  context.beginPath()
+  context.moveTo(x + safeRadius, y)
+  context.lineTo(x + width - safeRadius, y)
+  context.quadraticCurveTo(x + width, y, x + width, y + safeRadius)
+  context.lineTo(x + width, y + height - safeRadius)
+  context.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height)
+  context.lineTo(x + safeRadius, y + height)
+  context.quadraticCurveTo(x, y + height, x, y + height - safeRadius)
+  context.lineTo(x, y + safeRadius)
+  context.quadraticCurveTo(x, y, x + safeRadius, y)
+  context.closePath()
 }
 
 function drawCaptionOnCanvas(
@@ -1161,25 +1158,38 @@ function drawCaptionOnCanvas(
   context.lineWidth = style.strokeWidth * scale
   context.strokeStyle = style.stroke
   const words = window.map(cue => applyCaptionLetterCase(cue.text))
+  const fontPx = getFontPixelSize(context.font)
+  const padX = Math.max(8, Math.round(fontPx * 0.24))
+  const padY = Math.max(4, Math.round(fontPx * 0.14))
+  const cornerRadius = Math.max(8, Math.round(fontPx * 0.2))
   const spaceWidth = context.measureText(' ').width
-  const widths = words.map(word => context.measureText(word).width)
+  const metrics = words.map(word => context.measureText(word))
+  const widths = metrics.map(metric => metric.width)
   const totalTextWidth = widths.reduce((sum, size) => sum + size, 0) + (Math.max(0, words.length - 1) * spaceWidth)
   let cursorX = x - (totalTextWidth / 2)
 
   words.forEach((word, index) => {
     const cue = window[index]
     const wordWidth = widths[index] ?? 0
-    const wordProgress = cue?.activeProgress ?? 0
-    const wordY = y - getCaptionJumpOffset(wordProgress)
-    const popScale = getCaptionPopScale(wordProgress)
-    const wordCenterX = cursorX + (wordWidth / 2)
-    context.fillStyle = cue?.isActive ? CAPTION_HIGHLIGHT_COLOR : style.fill
-    context.save()
-    context.translate(wordCenterX, wordY)
-    context.scale(popScale, popScale)
-    context.strokeText(word, -(wordWidth / 2), 0)
-    context.fillText(word, -(wordWidth / 2), 0)
-    context.restore()
+    const metric = metrics[index]
+    const ascent = metric?.actualBoundingBoxAscent ?? (fontPx * 0.7)
+    const descent = metric?.actualBoundingBoxDescent ?? (fontPx * 0.3)
+
+    if (cue?.isActive) {
+      const boxX = cursorX - padX
+      const boxY = y - ascent - padY
+      const boxW = wordWidth + (padX * 2)
+      const boxH = ascent + descent + (padY * 2)
+      context.save()
+      context.fillStyle = CAPTION_ACTIVE_BG_COLOR
+      drawRoundedRect(context, boxX, boxY, boxW, boxH, cornerRadius)
+      context.fill()
+      context.restore()
+    }
+
+    context.fillStyle = cue?.isActive ? '#FFFFFF' : style.fill
+    context.strokeText(word, cursorX, y)
+    context.fillText(word, cursorX, y)
     cursorX += wordWidth + spaceWidth
   })
 }
