@@ -179,15 +179,28 @@ body {
 
 .preview-caption {
   position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: 1rem;
+  transform: translate(-50%, -50%);
   max-width: 90%;
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   font-size: 1.1rem;
   font-weight: 700;
   color: #fff;
   text-shadow: 0 3px 6px rgba(0, 0, 0, 0.9);
+}
+
+.preview-caption-word {
+  opacity: 0.7;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.preview-caption-word.active {
+  opacity: 1;
+  color: #facc15;
+  transform: scale(1.05);
 }
 
 .overlay-item {
@@ -250,6 +263,30 @@ body {
   margin-top: 1.2rem;
   border-top: 1px solid #27272a;
   padding-top: 0.8rem;
+}
+
+.inspector-captions label {
+  display: grid;
+  gap: 0.3rem;
+  margin-top: 0.65rem;
+  color: #e4e4e7;
+  font-size: 0.92rem;
+}
+
+.inspector-captions input {
+  border: 1px solid #3f3f46;
+  border-radius: 0.6rem;
+  background: #18181b;
+  color: #fafafa;
+  padding: 0.45rem 0.55rem;
+}
+
+.inspector-captions select {
+  border: 1px solid #3f3f46;
+  border-radius: 0.6rem;
+  background: #18181b;
+  color: #fafafa;
+  padding: 0.45rem 0.55rem;
 }
 
 .timeline-scroll {

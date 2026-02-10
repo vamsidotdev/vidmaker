@@ -51,6 +51,10 @@ interface StoredProject {
   captions: CaptionCue[]
   overlays: OverlayItem[]
   captionStyleId: CaptionStyleId
+  captionPositionX: number
+  captionPositionY: number
+  captionSizePercent: number
+  captionLetterCase: CaptionLetterCase
 }
 
 interface AsrChunk {
@@ -65,6 +69,7 @@ interface AsrResult {
 
 type CaptionModel = (input: string, options: Record<string, unknown>) => Promise<AsrResult>
 type CaptionStyleId = 'capcut' | 'minimal' | 'neon' | 'classic'
+type CaptionLetterCase = 'original' | 'uppercase' | 'lowercase' | 'capitalize'
 
 interface DragState {
   clipId: string
@@ -84,6 +89,10 @@ interface CaptionStyleConfig {
   shadow: string
 }
 
+interface CaptionWindowCue extends CaptionCue {
+  isActive: boolean
+}
+
 const DB_NAME = 'vidmaker-db'
 const DB_VERSION = 1
 const FILES_STORE = 'files'
@@ -92,6 +101,10 @@ const PROJECT_KEY = 'default'
 const IMAGE_DEFAULT_DURATION = 3
 const PX_PER_SECOND = 60
 const MIN_CLIP_DURATION = 0.2
+const CAPTION_WINDOW_WORD_COUNT = 3
+const CAPTION_HIGHLIGHT_COLOR = '#FACC15'
+const CAPTION_SIZE_MIN = 50
+const CAPTION_SIZE_MAX = 220
 
 const filePicker = ref<HTMLInputElement | null>(null)
 const currentTime = ref(0)
@@ -102,6 +115,10 @@ const overlays = ref<OverlayItem[]>([])
 const selectedClipId = ref<string | null>(null)
 const selectedOverlayId = ref<string | null>(null)
 const captionStyleId = ref<CaptionStyleId>('capcut')
+const captionPositionX = ref(50)
+const captionPositionY = ref(88)
+const captionSizePercent = ref(100)
+const captionLetterCase = ref<CaptionLetterCase>('uppercase')
 const statusMessage = ref('Import videos, photos and audio to start editing.')
 const draftSavedAt = ref<number | null>(null)
 const isExportingMp4 = ref(false)
@@ -128,6 +145,13 @@ const captionStyleOptions = [
   { label: 'Minimal', value: 'minimal' },
   { label: 'Neon', value: 'neon' },
   { label: 'Classic', value: 'classic' }
+]
+
+const captionLetterCaseOptions = [
+  { label: 'UPPERCASE', value: 'uppercase' },
+  { label: 'lowercase', value: 'lowercase' },
+  { label: 'Capitalize', value: 'capitalize' },
+  { label: 'Original', value: 'original' }
 ]
 
 const captionStyleConfig: Record<CaptionStyleId, CaptionStyleConfig> = {
@@ -193,12 +217,12 @@ const projectDuration = computed(() => {
 const timelineWidth = computed(() => Math.max(900, Math.ceil(projectDuration.value * PX_PER_SECOND)))
 const playbackPercent = computed(() => projectDuration.value ? (currentTime.value / projectDuration.value) * 100 : 0)
 const activeVisualClip = computed(() => visualClips.value.find(clip => inRange(currentTime.value, clip.start, clip.duration)) ?? null)
-const activeCaption = computed(() => captions.value.find(caption => inRange(currentTime.value, caption.start, caption.end - caption.start)) ?? null)
+const activeCaptionWindow = computed(() => getCaptionWindowForTime(currentTime.value))
 const selectedClip = computed(() => selectedClipId.value ? clips.value.find(clip => clip.id === selectedClipId.value) ?? null : null)
 const selectedOverlay = computed(() => selectedOverlayId.value ? overlays.value.find(item => item.id === selectedOverlayId.value) ?? null : null)
 
 watch(
-  [clips, captions, overlays, captionStyleId],
+  [clips, captions, overlays, captionStyleId, captionPositionX, captionPositionY, captionSizePercent, captionLetterCase],
   () => {
     if (!hasRestoredDraft) {
       return
@@ -231,6 +255,71 @@ function inRange(time: number, start: number, duration: number): boolean {
 
 function toStepTime(value: number): number {
   return Math.round(value * 20) / 20
+}
+
+function clampPercent(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) {
+    return fallback
+  }
+  return Math.min(100, Math.max(0, value))
+}
+
+function clampCaptionSizePercent(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) {
+    return fallback
+  }
+  return Math.min(CAPTION_SIZE_MAX, Math.max(CAPTION_SIZE_MIN, Math.round(value)))
+}
+
+function parseCaptionLetterCase(value: unknown): CaptionLetterCase {
+  if (value === 'original' || value === 'uppercase' || value === 'lowercase' || value === 'capitalize') {
+    return value
+  }
+  return 'uppercase'
+}
+
+function getCaptionScaleFactor(): number {
+  return clampCaptionSizePercent(captionSizePercent.value, 100) / 100
+}
+
+function scaleFontSize(font: string, scale: number): string {
+  return font.replace(/(\d+(?:\.\d+)?)px/, (_, rawSize: string) => {
+    const next = Math.max(10, Math.round(Number(rawSize) * scale))
+    return `${next}px`
+  })
+}
+
+function toCapitalizedWord(word: string): string {
+  if (!word) {
+    return word
+  }
+  return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+}
+
+function applyCaptionLetterCase(text: string): string {
+  if (captionLetterCase.value === 'original') {
+    return text
+  }
+  if (captionLetterCase.value === 'uppercase') {
+    return text.toUpperCase()
+  }
+  if (captionLetterCase.value === 'lowercase') {
+    return text.toLowerCase()
+  }
+  return text.split(' ').map(toCapitalizedWord).join(' ')
+}
+
+function getCaptionTextTransform(): string {
+  if (captionLetterCase.value === 'uppercase') {
+    return 'uppercase'
+  }
+  if (captionLetterCase.value === 'lowercase') {
+    return 'lowercase'
+  }
+  if (captionLetterCase.value === 'capitalize') {
+    return 'capitalize'
+  }
+  return 'none'
 }
 
 function openPicker(): void {
@@ -358,9 +447,13 @@ async function restoreDraft(): Promise<void> {
     }
 
     clips.value = restored
-    captions.value = Array.isArray(project.captions) ? project.captions : []
+    captions.value = normalizeStoredCaptionCues(Array.isArray(project.captions) ? project.captions : [])
     overlays.value = Array.isArray(project.overlays) ? project.overlays : []
     captionStyleId.value = project.captionStyleId ?? 'capcut'
+    captionPositionX.value = clampPercent(project.captionPositionX ?? 50, 50)
+    captionPositionY.value = clampPercent(project.captionPositionY ?? 88, 88)
+    captionSizePercent.value = clampCaptionSizePercent(project.captionSizePercent ?? 100, 100)
+    captionLetterCase.value = parseCaptionLetterCase(project.captionLetterCase)
     draftSavedAt.value = project.updatedAt
     hasRestoredDraft = true
     statusMessage.value = restored.length || overlays.value.length
@@ -411,7 +504,11 @@ async function saveDraft(): Promise<void> {
       color: item.color,
       bg: item.bg
     })),
-    captionStyleId: captionStyleId.value
+    captionStyleId: captionStyleId.value,
+    captionPositionX: clampPercent(captionPositionX.value, 50),
+    captionPositionY: clampPercent(captionPositionY.value, 88),
+    captionSizePercent: clampCaptionSizePercent(captionSizePercent.value, 100),
+    captionLetterCase: parseCaptionLetterCase(captionLetterCase.value)
   }
 
   await putProject(payload)
@@ -918,29 +1015,73 @@ function formatDateTime(timestamp: number | null): string {
 
 function getCaptionPreviewStyle(styleId: CaptionStyleId): Record<string, string> {
   const style = captionStyleConfig[styleId]
+  const scale = getCaptionScaleFactor()
   return {
     color: style.fill,
     textShadow: style.shadow,
-    WebkitTextStroke: `${Math.max(1, Math.floor(style.strokeWidth / 3))}px ${style.stroke}`,
-    font: style.font
+    WebkitTextStroke: `${Math.max(1, Math.floor((style.strokeWidth * scale) / 3))}px ${style.stroke}`,
+    font: scaleFontSize(style.font, scale),
+    textTransform: getCaptionTextTransform()
   }
+}
+
+function getCaptionPreviewPositionStyle(): Record<string, string> {
+  return {
+    left: `${captionPositionX.value}%`,
+    top: `${captionPositionY.value}%`
+  }
+}
+
+function getCaptionWindowForTime(time: number): CaptionWindowCue[] {
+  const activeIndex = captions.value.findIndex(cue => inRange(time, cue.start, cue.end - cue.start))
+  if (activeIndex < 0) {
+    return []
+  }
+
+  const total = captions.value.length
+  const maxStart = Math.max(0, total - CAPTION_WINDOW_WORD_COUNT)
+  const start = Math.min(Math.max(0, activeIndex - 1), maxStart)
+  const end = Math.min(total, start + CAPTION_WINDOW_WORD_COUNT)
+
+  return captions.value.slice(start, end).map((cue, index) => ({
+    ...cue,
+    isActive: start + index === activeIndex
+  }))
 }
 
 function drawCaptionOnCanvas(
   context: CanvasRenderingContext2D,
-  text: string,
+  window: CaptionWindowCue[],
   width: number,
   height: number
 ): void {
+  if (!window.length) {
+    return
+  }
+
   const style = captionStyleConfig[captionStyleId.value]
-  context.textAlign = 'center'
-  context.font = style.font
-  context.lineWidth = style.strokeWidth
+  const x = (clampPercent(captionPositionX.value, 50) / 100) * width
+  const y = (clampPercent(captionPositionY.value, 88) / 100) * height
+  context.textAlign = 'left'
+  context.textBaseline = 'middle'
+  const scale = getCaptionScaleFactor()
+  context.font = scaleFontSize(style.font, scale)
+  context.lineWidth = style.strokeWidth * scale
   context.strokeStyle = style.stroke
-  context.fillStyle = style.fill
-  const y = height - 210
-  context.strokeText(text, width / 2, y)
-  context.fillText(text, width / 2, y)
+  const words = window.map(cue => applyCaptionLetterCase(cue.text))
+  const spaceWidth = context.measureText(' ').width
+  const widths = words.map(word => context.measureText(word).width)
+  const totalTextWidth = widths.reduce((sum, size) => sum + size, 0) + (Math.max(0, words.length - 1) * spaceWidth)
+  let cursorX = x - (totalTextWidth / 2)
+
+  words.forEach((word, index) => {
+    const cue = window[index]
+    const wordWidth = widths[index] ?? 0
+    context.fillStyle = cue?.isActive ? CAPTION_HIGHLIGHT_COLOR : style.fill
+    context.strokeText(word, cursorX, y)
+    context.fillText(word, cursorX, y)
+    cursorX += wordWidth + spaceWidth
+  })
 }
 
 function drawOverlayOnCanvas(
@@ -1097,7 +1238,7 @@ async function renderProjectToWebm(onProgress: (value: number) => void): Promise
       }
 
       const visual = visualClips.value.find(clip => inRange(elapsed, clip.start, clip.duration)) ?? null
-      const caption = captions.value.find(cue => inRange(elapsed, cue.start, cue.end - cue.start)) ?? null
+      const captionWindow = getCaptionWindowForTime(elapsed)
       const activeOverlayItems = overlays.value.filter(item => inRange(elapsed, item.start, item.duration))
 
       for (const clip of visualClips.value) {
@@ -1161,8 +1302,8 @@ async function renderProjectToWebm(onProgress: (value: number) => void): Promise
         drawOverlayOnCanvas(context, item, width, height)
       }
 
-      if (caption?.text) {
-        drawCaptionOnCanvas(context, caption.text, width, height)
+      if (captionWindow.length) {
+        drawCaptionOnCanvas(context, captionWindow, width, height)
       }
 
       onProgress(Math.min(99, Math.floor((elapsed / projectDuration.value) * 100)))
@@ -1272,6 +1413,47 @@ function normalizeCaptionText(text: string): string {
   return text.replace(/\s+/g, ' ').trim()
 }
 
+function normalizeStoredCaptionCues(rawCues: CaptionCue[]): CaptionCue[] {
+  const normalized: CaptionCue[] = []
+
+  for (const cue of rawCues) {
+    const text = normalizeCaptionText(cue.text)
+    const safeStart = Number.isFinite(cue.start) ? Math.max(0, cue.start) : 0
+    const safeEnd = Number.isFinite(cue.end) ? Math.max(safeStart + 0.2, cue.end) : safeStart + 2
+    const words = text.split(' ').filter(Boolean)
+
+    if (words.length <= 1) {
+      if (!text) {
+        continue
+      }
+      normalized.push({
+        id: cue.id || crypto.randomUUID(),
+        start: safeStart,
+        end: safeEnd,
+        text
+      })
+      continue
+    }
+
+    const cueDuration = Math.max(0.2, safeEnd - safeStart)
+    const wordDuration = cueDuration / words.length
+    words.forEach((word, index) => {
+      const start = safeStart + (wordDuration * index)
+      const end = index === words.length - 1
+        ? safeEnd
+        : Math.min(safeEnd, start + wordDuration)
+      normalized.push({
+        id: crypto.randomUUID(),
+        start,
+        end: Math.max(start + 0.08, end),
+        text: word
+      })
+    })
+  }
+
+  return normalized
+}
+
 function buildCaptionCues(rawChunks: AsrChunk[], fallbackDuration: number): CaptionCue[] {
   const cues: CaptionCue[] = []
   let cursor = 0
@@ -1286,11 +1468,25 @@ function buildCaptionCues(rawChunks: AsrChunk[], fallbackDuration: number): Capt
     const safeStart = Number.isFinite(start) ? Math.max(0, start) : cursor
     const safeEnd = Number.isFinite(end) ? Math.max(safeStart + 0.2, end) : safeStart + 2
 
-    cues.push({
-      id: crypto.randomUUID(),
-      start: safeStart,
-      end: safeEnd,
-      text
+    const words = text.split(' ').filter(Boolean)
+    if (!words.length) {
+      cursor = safeEnd
+      continue
+    }
+
+    const chunkDuration = Math.max(0.2, safeEnd - safeStart)
+    const wordDuration = chunkDuration / words.length
+    words.forEach((word, index) => {
+      const start = safeStart + (wordDuration * index)
+      const end = index === words.length - 1
+        ? safeEnd
+        : Math.min(safeEnd, start + wordDuration)
+      cues.push({
+        id: crypto.randomUUID(),
+        start,
+        end: Math.max(start + 0.08, end),
+        text: word
+      })
     })
     cursor = safeEnd
   }
@@ -1491,11 +1687,18 @@ async function generateCaptions(): Promise<void> {
               Import video or photos to preview in portrait mode.
             </p>
             <p
-              v-if="activeCaption"
+              v-if="activeCaptionWindow.length"
               class="preview-caption"
-              :style="getCaptionPreviewStyle(captionStyleId)"
+              :style="{ ...getCaptionPreviewStyle(captionStyleId), ...getCaptionPreviewPositionStyle() }"
             >
-              {{ activeCaption.text }}
+              <span
+                v-for="cue in activeCaptionWindow"
+                :key="cue.id"
+                class="preview-caption-word"
+                :class="{ active: cue.isActive }"
+              >
+                {{ cue.text }}
+              </span>
             </p>
           </div>
         </div>
@@ -1674,6 +1877,54 @@ async function generateCaptions(): Promise<void> {
         <div class="inspector-captions">
           <h3>Captions</h3>
           <p>{{ captions.length }} cue(s) • style: {{ captionStyleConfig[captionStyleId].label }}</p>
+          <label>
+            Caption size (%)
+            <input
+              type="number"
+              :min="CAPTION_SIZE_MIN"
+              :max="CAPTION_SIZE_MAX"
+              step="5"
+              :value="captionSizePercent"
+              @input="captionSizePercent = clampCaptionSizePercent(Number(($event.target as HTMLInputElement).value), 100)"
+            >
+          </label>
+          <label>
+            Caption case
+            <select
+              :value="captionLetterCase"
+              @change="captionLetterCase = parseCaptionLetterCase(($event.target as HTMLSelectElement).value)"
+            >
+              <option
+                v-for="option in captionLetterCaseOptions"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <label>
+            Caption X (%)
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="1"
+              :value="captionPositionX"
+              @input="captionPositionX = clampPercent(Number(($event.target as HTMLInputElement).value), 50)"
+            >
+          </label>
+          <label>
+            Caption Y (%)
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="1"
+              :value="captionPositionY"
+              @input="captionPositionY = clampPercent(Number(($event.target as HTMLInputElement).value), 88)"
+            >
+          </label>
         </div>
       </article>
     </section>
