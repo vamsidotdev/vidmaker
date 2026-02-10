@@ -193,14 +193,16 @@ body {
 }
 
 .preview-caption-word {
-  opacity: 0.7;
-  transition: opacity 120ms ease, transform 120ms ease;
+  display: inline-block;
+  opacity: 0.62;
+  transition: opacity 70ms linear, color 70ms linear, text-shadow 70ms linear;
+  will-change: transform;
+  transform-origin: 50% 75%;
 }
 
 .preview-caption-word.active {
   opacity: 1;
   color: #facc15;
-  transform: scale(1.05);
 }
 
 .overlay-item {

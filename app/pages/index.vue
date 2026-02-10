@@ -91,6 +91,7 @@ interface CaptionStyleConfig {
 
 interface CaptionWindowCue extends CaptionCue {
   isActive: boolean
+  activeProgress: number
 }
 
 const DB_NAME = 'vidmaker-db'
@@ -103,6 +104,7 @@ const PX_PER_SECOND = 60
 const MIN_CLIP_DURATION = 0.2
 const CAPTION_WINDOW_WORD_COUNT = 3
 const CAPTION_HIGHLIGHT_COLOR = '#FACC15'
+const CAPTION_JUMP_MAX_PX = 16
 const CAPTION_SIZE_MIN = 50
 const CAPTION_SIZE_MAX = 220
 
@@ -1039,14 +1041,59 @@ function getCaptionWindowForTime(time: number): CaptionWindowCue[] {
   }
 
   const total = captions.value.length
-  const maxStart = Math.max(0, total - CAPTION_WINDOW_WORD_COUNT)
-  const start = Math.min(Math.max(0, activeIndex - 1), maxStart)
+  const start = Math.floor(activeIndex / CAPTION_WINDOW_WORD_COUNT) * CAPTION_WINDOW_WORD_COUNT
   const end = Math.min(total, start + CAPTION_WINDOW_WORD_COUNT)
 
   return captions.value.slice(start, end).map((cue, index) => ({
     ...cue,
-    isActive: start + index === activeIndex
+    isActive: start + index === activeIndex,
+    activeProgress: start + index === activeIndex
+      ? Math.min(1, Math.max(0, (time - cue.start) / Math.max(0.001, cue.end - cue.start)))
+      : 0
   }))
+}
+
+function getCaptionJumpOffset(progress: number): number {
+  if (progress <= 0 || progress >= 1) {
+    return 0
+  }
+  if (progress <= 0.22) {
+    return CAPTION_JUMP_MAX_PX * (progress / 0.22)
+  }
+  if (progress <= 0.52) {
+    return CAPTION_JUMP_MAX_PX * (1 - ((progress - 0.22) / 0.3))
+  }
+  if (progress <= 0.72) {
+    return -3 * Math.sin(((progress - 0.52) / 0.2) * Math.PI)
+  }
+  return 0
+}
+
+function getCaptionPopScale(progress: number): number {
+  if (progress <= 0 || progress >= 1) {
+    return 1
+  }
+  if (progress <= 0.18) {
+    return 1 + (0.22 * (progress / 0.18))
+  }
+  if (progress <= 0.42) {
+    return 1.22 - (0.24 * ((progress - 0.18) / 0.24))
+  }
+  if (progress <= 0.62) {
+    return 0.98 + (0.02 * ((progress - 0.42) / 0.2))
+  }
+  return 1
+}
+
+function getPreviewCaptionWordStyle(cue: CaptionWindowCue): Record<string, string> {
+  const jumpOffset = cue.isActive ? getCaptionJumpOffset(cue.activeProgress) : 0
+  const popScale = cue.isActive ? getCaptionPopScale(cue.activeProgress) : 1
+  return {
+    transform: `translateY(-${jumpOffset.toFixed(2)}px) scale(${popScale.toFixed(3)})`,
+    textShadow: cue.isActive
+      ? '0 0 12px rgba(250, 204, 21, 0.45), 0 2px 6px rgba(0, 0, 0, 0.9)'
+      : '0 2px 6px rgba(0, 0, 0, 0.9)'
+  }
 }
 
 function drawCaptionOnCanvas(
@@ -1077,9 +1124,17 @@ function drawCaptionOnCanvas(
   words.forEach((word, index) => {
     const cue = window[index]
     const wordWidth = widths[index] ?? 0
+    const wordProgress = cue?.activeProgress ?? 0
+    const wordY = y - getCaptionJumpOffset(wordProgress)
+    const popScale = getCaptionPopScale(wordProgress)
+    const wordCenterX = cursorX + (wordWidth / 2)
     context.fillStyle = cue?.isActive ? CAPTION_HIGHLIGHT_COLOR : style.fill
-    context.strokeText(word, cursorX, y)
-    context.fillText(word, cursorX, y)
+    context.save()
+    context.translate(wordCenterX, wordY)
+    context.scale(popScale, popScale)
+    context.strokeText(word, -(wordWidth / 2), 0)
+    context.fillText(word, -(wordWidth / 2), 0)
+    context.restore()
     cursorX += wordWidth + spaceWidth
   })
 }
@@ -1696,6 +1751,7 @@ async function generateCaptions(): Promise<void> {
                 :key="cue.id"
                 class="preview-caption-word"
                 :class="{ active: cue.isActive }"
+                :style="getPreviewCaptionWordStyle(cue)"
               >
                 {{ cue.text }}
               </span>
