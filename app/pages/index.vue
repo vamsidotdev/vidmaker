@@ -45,7 +45,9 @@ interface OverlayItem {
 }
 
 interface StoredProject {
-  id: 'default'
+  id: string
+  name: string
+  createdAt: number
   updatedAt: number
   clips: StoredClip[]
   captions: CaptionCue[]
@@ -93,11 +95,17 @@ interface CaptionWindowCue extends CaptionCue {
   isActive: boolean
 }
 
+interface ProjectCard {
+  id: string
+  name: string
+  createdAt: number
+  updatedAt: number
+}
+
 const DB_NAME = 'vidmaker-db'
 const DB_VERSION = 1
 const FILES_STORE = 'files'
 const PROJECTS_STORE = 'projects'
-const PROJECT_KEY = 'default'
 const IMAGE_DEFAULT_DURATION = 3
 const PX_PER_SECOND = 60
 const TIMELINE_LABEL_WIDTH = 72
@@ -108,6 +116,10 @@ const CAPTION_SIZE_MIN = 50
 const CAPTION_SIZE_MAX = 220
 
 const filePicker = ref<HTMLInputElement | null>(null)
+const currentView = ref<'projects' | 'editor'>('projects')
+const currentProjectId = ref<string | null>(null)
+const projects = ref<ProjectCard[]>([])
+const newProjectName = ref('')
 const currentTime = ref(0)
 const isPlaying = ref(false)
 const clips = ref<Clip[]>([])
@@ -138,7 +150,7 @@ let playbackRaf = 0
 let playbackLastTimestamp = 0
 let draftSaveTimeout: ReturnType<typeof setTimeout> | null = null
 let captionsModel: CaptionModel | null = null
-let hasRestoredDraft = false
+let isProjectReady = false
 const dragState = ref<DragState | null>(null)
 const timelineInnerRef = ref<HTMLElement | null>(null)
 const isTimelineScrubbing = ref(false)
@@ -231,7 +243,7 @@ const selectedOverlay = computed(() => selectedOverlayId.value ? overlays.value.
 watch(
   [clips, captions, overlays, captionStyleId, captionPositionX, captionPositionY, captionSizePercent, captionLetterCase],
   () => {
-    if (!hasRestoredDraft) {
+    if (!isProjectReady || !currentProjectId.value) {
       return
     }
 
@@ -241,8 +253,7 @@ watch(
 )
 
 onMounted(async () => {
-  await restoreDraft()
-  syncPreviewMedia(true)
+  await loadProjects()
   window.addEventListener('pointermove', onPointerMove)
   window.addEventListener('pointerup', onPointerUp)
 })
@@ -412,26 +423,84 @@ async function putProject(project: StoredProject): Promise<void> {
   })
 }
 
-async function getProject(): Promise<StoredProject | null> {
+async function getProject(projectId: string): Promise<StoredProject | null> {
   const database = await openDatabase()
   return await new Promise<StoredProject | null>((resolve, reject) => {
     const tx = database.transaction(PROJECTS_STORE, 'readonly')
-    const request = tx.objectStore(PROJECTS_STORE).get(PROJECT_KEY)
+    const request = tx.objectStore(PROJECTS_STORE).get(projectId)
     request.onsuccess = () => resolve((request.result as StoredProject | undefined) ?? null)
     request.onerror = () => reject(request.error)
   })
 }
 
-async function restoreDraft(): Promise<void> {
+async function listProjects(): Promise<ProjectCard[]> {
+  const database = await openDatabase()
+  return await new Promise<ProjectCard[]>((resolve, reject) => {
+    const tx = database.transaction(PROJECTS_STORE, 'readonly')
+    const request = tx.objectStore(PROJECTS_STORE).getAll()
+    request.onsuccess = () => {
+      const result = Array.isArray(request.result) ? request.result as StoredProject[] : []
+      resolve(result.map(project => ({
+        id: project.id,
+        name: project.name ?? 'Untitled Project',
+        createdAt: Number.isFinite(project.createdAt) ? project.createdAt : project.updatedAt,
+        updatedAt: project.updatedAt
+      })))
+    }
+    request.onerror = () => reject(request.error)
+  })
+}
+
+function resetEditorState(): void {
+  stopPlayback()
+  selectedClipId.value = null
+  selectedOverlayId.value = null
+  currentTime.value = 0
+  visualVideoRefs.clear()
+  audioRefs.clear()
+  clips.value.forEach((clip) => {
+    URL.revokeObjectURL(clip.url)
+    createdUrls.delete(clip.url)
+  })
+  clips.value = []
+  captions.value = []
+  overlays.value = []
+  captionStyleId.value = 'capcut'
+  captionPositionX.value = 50
+  captionPositionY.value = 88
+  captionSizePercent.value = 100
+  captionLetterCase.value = 'uppercase'
+  draftSavedAt.value = null
+}
+
+async function loadProjects(): Promise<void> {
   if (!import.meta.client) {
     return
   }
 
   try {
-    const project = await getProject()
+    projects.value = (await listProjects()).sort((a, b) => b.updatedAt - a.updatedAt)
+    statusMessage.value = projects.value.length
+      ? 'Select a project or create a new one.'
+      : 'Create your first project to start editing.'
+  } catch (error) {
+    statusMessage.value = `Could not load projects: ${String(error)}`
+  }
+}
+
+async function restoreDraft(projectId: string): Promise<void> {
+  if (!import.meta.client) {
+    return
+  }
+
+  isProjectReady = false
+  resetEditorState()
+
+  try {
+    const project = await getProject(projectId)
 
     if (!project) {
-      hasRestoredDraft = true
+      isProjectReady = true
       return
     }
 
@@ -462,24 +531,71 @@ async function restoreDraft(): Promise<void> {
     captionSizePercent.value = clampCaptionSizePercent(project.captionSizePercent ?? 100, 100)
     captionLetterCase.value = parseCaptionLetterCase(project.captionLetterCase)
     draftSavedAt.value = project.updatedAt
-    hasRestoredDraft = true
+    isProjectReady = true
     statusMessage.value = restored.length || overlays.value.length
       ? 'Restored your last draft from local storage.'
       : 'Draft restored but no media files were available.'
   } catch (error) {
-    hasRestoredDraft = true
+    isProjectReady = true
     statusMessage.value = `Could not restore draft: ${String(error)}`
   }
 }
 
+async function createProject(): Promise<void> {
+  const trimmedName = newProjectName.value.trim()
+  const now = Date.now()
+  const project: StoredProject = {
+    id: crypto.randomUUID(),
+    name: trimmedName || `Project ${projects.value.length + 1}`,
+    createdAt: now,
+    updatedAt: now,
+    clips: [],
+    captions: [],
+    overlays: [],
+    captionStyleId: 'capcut',
+    captionPositionX: 50,
+    captionPositionY: 88,
+    captionSizePercent: 100,
+    captionLetterCase: 'uppercase'
+  }
+
+  try {
+    await putProject(project)
+    newProjectName.value = ''
+    await loadProjects()
+    await openProject(project.id)
+  } catch (error) {
+    statusMessage.value = `Could not create project: ${String(error)}`
+  }
+}
+
+async function openProject(projectId: string): Promise<void> {
+  currentProjectId.value = projectId
+  await restoreDraft(projectId)
+  currentView.value = 'editor'
+  syncPreviewMedia(true)
+}
+
+async function backToProjects(): Promise<void> {
+  await saveDraft()
+  currentView.value = 'projects'
+  currentProjectId.value = null
+  resetEditorState()
+  await loadProjects()
+}
+
 async function saveDraft(): Promise<void> {
-  if (!import.meta.client || !hasRestoredDraft) {
+  if (!import.meta.client || !isProjectReady || !currentProjectId.value) {
     return
   }
 
+  const currentProject = projects.value.find(project => project.id === currentProjectId.value)
+  const now = Date.now()
   const payload: StoredProject = {
-    id: PROJECT_KEY,
-    updatedAt: Date.now(),
+    id: currentProjectId.value,
+    name: currentProject?.name ?? 'Untitled Project',
+    createdAt: currentProject?.createdAt ?? now,
+    updatedAt: now,
     clips: clips.value.map(({ id, fileId, name, kind, start, duration, sourceOffset, sourceDuration, volume, muted, previousVolume }) => ({
       id,
       fileId,
@@ -520,6 +636,15 @@ async function saveDraft(): Promise<void> {
 
   await putProject(payload)
   draftSavedAt.value = payload.updatedAt
+  projects.value = projects.value
+    .map(project => (project.id === payload.id
+      ? {
+          ...project,
+          name: payload.name,
+          updatedAt: payload.updatedAt
+        }
+      : project))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
 async function getMediaDuration(url: string, kind: 'video' | 'audio'): Promise<number> {
@@ -1685,12 +1810,52 @@ async function generateCaptions(): Promise<void> {
 
 <template>
   <div class="editor-page">
-    <header class="editor-header">
+    <section v-if="currentView === 'projects'" class="projects-view">
+      <header class="editor-header">
+        <div>
+          <h1>Vidmaker Projects</h1>
+          <p>Create a project, then open it to start editing.</p>
+        </div>
+      </header>
+
+      <div class="projects-create-row">
+        <input
+          v-model="newProjectName"
+          class="project-name-input"
+          type="text"
+          placeholder="New project name"
+          @keydown.enter.prevent="createProject"
+        >
+        <button class="btn btn-primary" @click="createProject">
+          Create Project
+        </button>
+      </div>
+
+      <div v-if="projects.length" class="projects-grid">
+        <button
+          v-for="project in projects"
+          :key="project.id"
+          class="project-card"
+          @click="openProject(project.id)"
+        >
+          <strong>{{ project.name }}</strong>
+          <small>Updated {{ formatDateTime(project.updatedAt) }}</small>
+        </button>
+      </div>
+      <p v-else class="projects-empty">
+        No projects yet. Create one to get started.
+      </p>
+    </section>
+
+    <header v-else class="editor-header">
       <div>
         <h1>Vidmaker</h1>
         <p>Simple local iMovie-style editor for portrait videos (9:16).</p>
       </div>
       <div class="header-actions">
+        <button class="btn" @click="backToProjects">
+          Back to Projects
+        </button>
         <input
           ref="filePicker"
           type="file"
@@ -1732,12 +1897,12 @@ async function generateCaptions(): Promise<void> {
       </div>
     </header>
 
-    <div class="status-row">
+    <div v-if="currentView === 'editor'" class="status-row">
       <span>{{ statusMessage }}</span>
       <span>Draft saved: {{ formatDateTime(draftSavedAt) }}</span>
     </div>
 
-    <section class="editor-main">
+    <section v-if="currentView === 'editor'" class="editor-main">
       <article class="preview-panel">
         <div class="preview-toolbar">
           <label>
@@ -2040,7 +2205,7 @@ async function generateCaptions(): Promise<void> {
       </article>
     </section>
 
-    <section class="timeline-panel">
+    <section v-if="currentView === 'editor'" class="timeline-panel">
       <h2>Timeline</h2>
       <div class="timeline-scroll">
         <div
@@ -2112,13 +2277,15 @@ async function generateCaptions(): Promise<void> {
       </div>
     </section>
 
-    <audio
-      v-for="clip in audioClips"
-      :key="`audio-${clip.id}`"
-      :ref="setAudioRef(clip.id)"
-      :src="clip.url"
-      preload="metadata"
-      class="hidden"
-    />
+    <template v-if="currentView === 'editor'">
+      <audio
+        v-for="clip in audioClips"
+        :key="`audio-${clip.id}`"
+        :ref="setAudioRef(clip.id)"
+        :src="clip.url"
+        preload="metadata"
+        class="hidden"
+      />
+    </template>
   </div>
 </template>

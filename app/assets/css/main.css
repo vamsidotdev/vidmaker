@@ -56,6 +56,53 @@ body {
   margin-top: 0.25rem;
 }
 
+.projects-view {
+  display: grid;
+  gap: 1rem;
+}
+
+.projects-create-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 380px) auto;
+  gap: 0.65rem;
+  align-items: center;
+}
+
+.project-name-input {
+  border: 1px solid #3f3f46;
+  border-radius: 0.6rem;
+  background: #18181b;
+  color: #fafafa;
+  padding: 0.55rem 0.65rem;
+}
+
+.projects-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.project-card {
+  border: 1px solid #27272a;
+  border-radius: 0.85rem;
+  background: #111113;
+  color: #fafafa;
+  padding: 0.85rem;
+  text-align: left;
+  display: grid;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+
+.project-card:hover {
+  border-color: #52525b;
+}
+
+.project-card small,
+.projects-empty {
+  color: #a1a1aa;
+}
+
 .header-actions {
   display: flex;
   gap: 0.65rem;
@@ -397,6 +444,10 @@ body {
 
 @media (max-width: 1100px) {
   .editor-main {
+    grid-template-columns: 1fr;
+  }
+
+  .projects-create-row {
     grid-template-columns: 1fr;
   }
 
