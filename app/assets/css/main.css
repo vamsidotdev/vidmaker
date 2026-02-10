@@ -299,6 +299,11 @@ body {
 .timeline-inner {
   position: relative;
   min-height: 200px;
+  cursor: ew-resize;
+}
+
+.timeline-inner.scrubbing {
+  cursor: grabbing;
 }
 
 .timeline-playhead {
@@ -308,6 +313,7 @@ body {
   width: 2px;
   background: #ef4444;
   z-index: 30;
+  pointer-events: none;
 }
 
 .timeline-track-row {

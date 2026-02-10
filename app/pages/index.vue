@@ -101,6 +101,7 @@ const PROJECTS_STORE = 'projects'
 const PROJECT_KEY = 'default'
 const IMAGE_DEFAULT_DURATION = 3
 const PX_PER_SECOND = 60
+const TIMELINE_LABEL_WIDTH = 72
 const MIN_CLIP_DURATION = 0.2
 const CAPTION_WINDOW_WORD_COUNT = 3
 const CAPTION_HIGHLIGHT_COLOR = '#FACC15'
@@ -141,6 +142,8 @@ let draftSaveTimeout: ReturnType<typeof setTimeout> | null = null
 let captionsModel: CaptionModel | null = null
 let hasRestoredDraft = false
 const dragState = ref<DragState | null>(null)
+const timelineInnerRef = ref<HTMLElement | null>(null)
+const isTimelineScrubbing = ref(false)
 
 const captionStyleOptions = [
   { label: 'CapCut Punch', value: 'capcut' },
@@ -216,8 +219,12 @@ const projectDuration = computed(() => {
   return Math.max(clipEnd, overlayEnd)
 })
 
-const timelineWidth = computed(() => Math.max(900, Math.ceil(projectDuration.value * PX_PER_SECOND)))
-const playbackPercent = computed(() => projectDuration.value ? (currentTime.value / projectDuration.value) * 100 : 0)
+const timelineTrackWidth = computed(() => Math.max(900, Math.ceil(projectDuration.value * PX_PER_SECOND)))
+const timelineInnerWidth = computed(() => timelineTrackWidth.value + TIMELINE_LABEL_WIDTH)
+const timelinePlayheadLeft = computed(() => {
+  const clampedPlayhead = Math.min(timelineTrackWidth.value, Math.max(0, currentTime.value * PX_PER_SECOND))
+  return TIMELINE_LABEL_WIDTH + clampedPlayhead
+})
 const activeVisualClip = computed(() => visualClips.value.find(clip => inRange(currentTime.value, clip.start, clip.duration)) ?? null)
 const activeCaptionWindow = computed(() => getCaptionWindowForTime(currentTime.value))
 const selectedClip = computed(() => selectedClipId.value ? clips.value.find(clip => clip.id === selectedClipId.value) ?? null : null)
@@ -909,7 +916,42 @@ function startClipDrag(mode: DragState['mode'], clip: Clip, event: PointerEvent)
   }
 }
 
+function seekFromTimelineClientX(clientX: number): void {
+  const timelineEl = timelineInnerRef.value
+  if (!timelineEl) {
+    return
+  }
+
+  const rect = timelineEl.getBoundingClientRect()
+  const trackX = clientX - rect.left - TIMELINE_LABEL_WIDTH
+  seekTo(trackX / PX_PER_SECOND)
+}
+
+function startTimelineScrub(event: PointerEvent): void {
+  if (event.button !== 0) {
+    return
+  }
+
+  const target = event.target
+  if (!(target instanceof Element)) {
+    return
+  }
+
+  if (target.closest('.clip-chip') || target.closest('.trim-handle')) {
+    return
+  }
+
+  isTimelineScrubbing.value = true
+  seekFromTimelineClientX(event.clientX)
+  event.preventDefault()
+}
+
 function onPointerMove(event: PointerEvent): void {
+  if (isTimelineScrubbing.value) {
+    seekFromTimelineClientX(event.clientX)
+    return
+  }
+
   if (!dragState.value) {
     return
   }
@@ -957,12 +999,15 @@ function onPointerMove(event: PointerEvent): void {
 }
 
 function onPointerUp(): void {
-  if (!dragState.value) {
+  if (isTimelineScrubbing.value) {
+    isTimelineScrubbing.value = false
     return
   }
 
-  dragState.value = null
-  syncPreviewMedia(true)
+  if (dragState.value) {
+    dragState.value = null
+    syncPreviewMedia(true)
+  }
 }
 
 function addTitle(): void {
@@ -1784,7 +1829,7 @@ async function generateCaptions(): Promise<void> {
 
       <article class="inspector-panel">
         <h2>Inspector</h2>
-        <p>Drag clip body to reorder in timeline. Drag handles to trim left/right.</p>
+        <p>Drag clip body to reorder in timeline, drag handles to trim, and drag the red playhead line to scrub.</p>
 
         <div v-if="selectedClip" class="inspector-form">
           <p><strong>{{ selectedClip.name }}</strong> ({{ selectedClip.kind }})</p>
@@ -1988,8 +2033,14 @@ async function generateCaptions(): Promise<void> {
     <section class="timeline-panel">
       <h2>Timeline</h2>
       <div class="timeline-scroll">
-        <div class="timeline-inner" :style="{ width: `${timelineWidth}px` }">
-          <div class="timeline-playhead" :style="{ left: `${(playbackPercent / 100) * timelineWidth}px` }" />
+        <div
+          ref="timelineInnerRef"
+          class="timeline-inner"
+          :class="{ scrubbing: isTimelineScrubbing }"
+          :style="{ width: `${timelineInnerWidth}px` }"
+          @pointerdown="startTimelineScrub($event)"
+        >
+          <div class="timeline-playhead" :style="{ left: `${timelinePlayheadLeft}px` }" />
 
           <div class="timeline-track-row">
             <span class="track-label">Visual</span>
