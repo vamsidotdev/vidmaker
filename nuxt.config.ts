@@ -11,8 +11,13 @@ export default defineNuxtConfig({
 
   css: ['~/assets/css/main.css'],
 
+  runtimeConfig: {
+    elevenlabsApiKey: process.env.ELEVENLABS_API_KEY || ''
+  },
+
   routeRules: {
-    '/': { prerender: true }
+    '/': { prerender: true },
+    '/elevenlabs': { prerender: true }
   },
 
   devServer: {

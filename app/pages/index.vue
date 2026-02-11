@@ -102,10 +102,25 @@ interface ProjectCard {
   updatedAt: number
 }
 
+interface SavedGeneratedAudioItem {
+  id: string
+  fileId: string
+  name: string
+  description: string
+  liked: boolean
+  createdAt: number
+  voiceId: string
+  voiceName: string
+  modelId: string
+  source: 'generated' | 'history'
+  historyItemId?: string
+}
+
 const DB_NAME = 'vidmaker-db'
 const DB_VERSION = 1
 const FILES_STORE = 'files'
 const PROJECTS_STORE = 'projects'
+const SAVED_AUDIO_STORAGE_KEY = 'vidmaker-elevenlabs-audio-library-v1'
 const IMAGE_DEFAULT_DURATION = 3
 const PX_PER_SECOND = 60
 const TIMELINE_LABEL_WIDTH = 72
@@ -140,6 +155,10 @@ const exportProgress = ref(0)
 const mp4Progress = ref(0)
 const isGeneratingCaptions = ref(false)
 const captionsProgress = ref(0)
+const savedAudioItems = ref<SavedGeneratedAudioItem[]>([])
+const selectedSavedAudioId = ref('')
+const showSavedAudioImporter = ref(false)
+const isImportingSavedAudio = ref(false)
 
 const createdUrls = new Set<string>()
 const visualVideoRefs = new Map<string, HTMLVideoElement>()
@@ -239,6 +258,12 @@ const activeVisualClip = computed(() => visualClips.value.find(clip => inRange(c
 const activeCaptionWindow = computed(() => getCaptionWindowForTime(currentTime.value))
 const selectedClip = computed(() => selectedClipId.value ? clips.value.find(clip => clip.id === selectedClipId.value) ?? null : null)
 const selectedOverlay = computed(() => selectedOverlayId.value ? overlays.value.find(item => item.id === selectedOverlayId.value) ?? null : null)
+const selectedSavedAudio = computed(() => {
+  if (!selectedSavedAudioId.value) {
+    return null
+  }
+  return savedAudioItems.value.find(item => item.id === selectedSavedAudioId.value) ?? null
+})
 
 watch(
   [clips, captions, overlays, captionStyleId, captionPositionX, captionPositionY, captionSizePercent, captionLetterCase],
@@ -254,6 +279,7 @@ watch(
 
 onMounted(async () => {
   await loadProjects()
+  loadSavedAudioLibrary()
   window.addEventListener('pointermove', onPointerMove)
   window.addEventListener('pointerup', onPointerUp)
 })
@@ -294,6 +320,69 @@ function parseCaptionLetterCase(value: unknown): CaptionLetterCase {
     return value
   }
   return 'uppercase'
+}
+
+function loadSavedAudioLibrary(): void {
+  if (!import.meta.client) {
+    return
+  }
+
+  const raw = localStorage.getItem(SAVED_AUDIO_STORAGE_KEY)
+  if (!raw) {
+    savedAudioItems.value = []
+    selectedSavedAudioId.value = ''
+    return
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as SavedGeneratedAudioItem[]
+    if (!Array.isArray(parsed)) {
+      savedAudioItems.value = []
+      selectedSavedAudioId.value = ''
+      return
+    }
+    savedAudioItems.value = parsed
+      .filter(item => item && typeof item.id === 'string' && typeof item.fileId === 'string')
+      .map((item): SavedGeneratedAudioItem => ({
+        ...item,
+        description: typeof item.description === 'string' ? item.description : '',
+        liked: Boolean(item.liked),
+        createdAt: Number.isFinite(item.createdAt) ? item.createdAt : Date.now(),
+        voiceId: typeof item.voiceId === 'string' ? item.voiceId : '',
+        voiceName: typeof item.voiceName === 'string' ? item.voiceName : '',
+        modelId: typeof item.modelId === 'string' ? item.modelId : '',
+        source: item.source === 'history' ? 'history' : 'generated'
+      }))
+      .sort((a, b) => b.createdAt - a.createdAt)
+
+    if (!savedAudioItems.value.length) {
+      selectedSavedAudioId.value = ''
+      return
+    }
+
+    if (!selectedSavedAudioId.value || !savedAudioItems.value.some(item => item.id === selectedSavedAudioId.value)) {
+      const first = savedAudioItems.value[0]
+      selectedSavedAudioId.value = first ? first.id : ''
+    }
+  } catch {
+    savedAudioItems.value = []
+    selectedSavedAudioId.value = ''
+    statusMessage.value = 'Could not read saved ElevenLabs audio library.'
+  }
+}
+
+function getSavedAudioOptionLabel(item: SavedGeneratedAudioItem): string {
+  const marker = item.liked ? '♥' : '•'
+  const description = item.description.trim() || item.name
+  const voice = item.voiceName || item.voiceId || 'Unknown voice'
+  return `${marker} ${description} (${voice})`
+}
+
+function toggleSavedAudioImporter(): void {
+  showSavedAudioImporter.value = !showSavedAudioImporter.value
+  if (showSavedAudioImporter.value) {
+    loadSavedAudioLibrary()
+  }
 }
 
 function getCaptionScaleFactor(): number {
@@ -572,6 +661,7 @@ async function createProject(): Promise<void> {
 async function openProject(projectId: string): Promise<void> {
   currentProjectId.value = projectId
   await restoreDraft(projectId)
+  loadSavedAudioLibrary()
   currentView.value = 'editor'
   syncPreviewMedia(true)
 }
@@ -580,8 +670,13 @@ async function backToProjects(): Promise<void> {
   await saveDraft()
   currentView.value = 'projects'
   currentProjectId.value = null
+  showSavedAudioImporter.value = false
   resetEditorState()
   await loadProjects()
+}
+
+async function openElevenLabsScreen(): Promise<void> {
+  await navigateTo('/elevenlabs')
 }
 
 async function saveDraft(): Promise<void> {
@@ -741,6 +836,64 @@ async function importMedia(event: Event): Promise<void> {
   statusMessage.value = `Imported ${selectedFiles.length} file(s).`
   await saveDraft()
   syncPreviewMedia(true)
+}
+
+async function importSavedAudioFromLibrary(): Promise<void> {
+  if (!currentProjectId.value) {
+    statusMessage.value = 'Open a project first.'
+    return
+  }
+
+  loadSavedAudioLibrary()
+  if (!selectedSavedAudioId.value) {
+    statusMessage.value = 'Choose a saved audio item first.'
+    return
+  }
+
+  const selected = savedAudioItems.value.find(item => item.id === selectedSavedAudioId.value)
+  if (!selected) {
+    statusMessage.value = 'Selected saved audio item is no longer available.'
+    return
+  }
+
+  isImportingSavedAudio.value = true
+  try {
+    const fileRecord = await getFile(selected.fileId)
+    if (!fileRecord) {
+      statusMessage.value = 'Saved audio blob was not found. Re-save it from ElevenLabs screen.'
+      return
+    }
+
+    const url = createUrl(fileRecord.blob)
+    const duration = await getMediaDuration(url, 'audio')
+    const safeDuration = Math.max(MIN_CLIP_DURATION, duration || IMAGE_DEFAULT_DURATION)
+
+    const clip: Clip = {
+      id: crypto.randomUUID(),
+      fileId: selected.fileId,
+      name: selected.description.trim() || selected.name,
+      kind: 'audio',
+      start: getTrackEnd('audio'),
+      duration: safeDuration,
+      sourceDuration: safeDuration,
+      sourceOffset: 0,
+      volume: 1,
+      muted: false,
+      previousVolume: 1,
+      url
+    }
+
+    clips.value.push(clip)
+    selectedClipId.value = clip.id
+    selectedOverlayId.value = null
+    statusMessage.value = `Imported saved audio: ${clip.name}`
+    await saveDraft()
+    syncPreviewMedia(true)
+  } catch (error) {
+    statusMessage.value = `Could not import saved audio: ${String(error)}`
+  } finally {
+    isImportingSavedAudio.value = false
+  }
 }
 
 function setVisualVideoRef(id: string) {
@@ -1818,6 +1971,15 @@ async function generateCaptions(): Promise<void> {
         </div>
       </header>
 
+      <nav class="projects-tabs" aria-label="Projects screens">
+        <button class="projects-tab is-active" type="button">
+          Projects
+        </button>
+        <button class="projects-tab" type="button" @click="openElevenLabsScreen">
+          ElevenLabs Speech
+        </button>
+      </nav>
+
       <div class="projects-create-row">
         <input
           v-model="newProjectName"
@@ -1870,6 +2032,9 @@ async function generateCaptions(): Promise<void> {
         >
           Import Media
         </button>
+        <button class="btn" @click="toggleSavedAudioImporter">
+          {{ showSavedAudioImporter ? 'Hide Saved Audio' : 'Import Saved Audio' }}
+        </button>
         <button
           class="btn"
           :disabled="isGeneratingCaptions"
@@ -1901,6 +2066,29 @@ async function generateCaptions(): Promise<void> {
       <span>{{ statusMessage }}</span>
       <span>Draft saved: {{ formatDateTime(draftSavedAt) }}</span>
     </div>
+
+    <section v-if="currentView === 'editor' && showSavedAudioImporter" class="saved-audio-importer">
+      <h3>Import Saved ElevenLabs Audio</h3>
+      <div class="saved-audio-controls">
+        <select v-model="selectedSavedAudioId" class="saved-audio-select">
+          <option value="">
+            Select saved audio
+          </option>
+          <option v-for="item in savedAudioItems" :key="item.id" :value="item.id">
+            {{ getSavedAudioOptionLabel(item) }}
+          </option>
+        </select>
+        <button class="btn" @click="loadSavedAudioLibrary">
+          Refresh Library
+        </button>
+        <button class="btn btn-primary" :disabled="!selectedSavedAudio || isImportingSavedAudio" @click="importSavedAudioFromLibrary">
+          {{ isImportingSavedAudio ? 'Importing...' : 'Import Into Current Project' }}
+        </button>
+      </div>
+      <p v-if="!savedAudioItems.length" class="projects-empty">
+        No saved audios found. Save audio from the ElevenLabs screen first.
+      </p>
+    </section>
 
     <section v-if="currentView === 'editor'" class="editor-main">
       <article class="preview-panel">

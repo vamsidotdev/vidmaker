@@ -61,6 +61,31 @@ body {
   gap: 1rem;
 }
 
+.projects-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.projects-tab {
+  border: 1px solid #3f3f46;
+  background: #18181b;
+  color: #fafafa;
+  border-radius: 0.6rem;
+  padding: 0.45rem 0.8rem;
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+.projects-tab:hover {
+  border-color: #71717a;
+}
+
+.projects-tab.is-active {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
 .projects-create-row {
   display: grid;
   grid-template-columns: minmax(220px, 380px) auto;
@@ -153,6 +178,37 @@ body {
   background: #111113;
   color: #d4d4d8;
   flex-wrap: wrap;
+}
+
+.saved-audio-importer {
+  border: 1px solid #27272a;
+  border-radius: 0.8rem;
+  padding: 0.9rem 1rem;
+  background: #111113;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.saved-audio-importer h3 {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.saved-audio-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.saved-audio-select {
+  flex: 1;
+  min-width: 260px;
+  border: 1px solid #3f3f46;
+  border-radius: 0.6rem;
+  background: #18181b;
+  color: #fafafa;
+  padding: 0.45rem 0.55rem;
 }
 
 .editor-main {
@@ -307,6 +363,30 @@ body {
   padding: 0.45rem 0.55rem;
 }
 
+.inspector-form select,
+.inspector-form textarea {
+  border: 1px solid #3f3f46;
+  border-radius: 0.6rem;
+  background: #18181b;
+  color: #fafafa;
+  padding: 0.45rem 0.55rem;
+}
+
+.inspector-form textarea {
+  resize: vertical;
+}
+
+.checkbox-label {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.checkbox-label input[type='checkbox'] {
+  width: 1rem;
+  height: 1rem;
+}
+
 .inspector-empty {
   margin-top: 1rem;
 }
@@ -442,6 +522,166 @@ body {
   right: 0;
 }
 
+.elevenlabs-layout {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+}
+
+.elevenlabs-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.elevenlabs-audio {
+  width: 100%;
+}
+
+.voice-slider-group {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.voice-slider-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.voice-slider-title-row strong {
+  font-size: 1rem;
+}
+
+.voice-slider-title-row small {
+  color: #a1a1aa;
+}
+
+.voice-slider-label-row {
+  display: flex;
+  justify-content: space-between;
+  color: #a1a1aa;
+  font-size: 0.92rem;
+}
+
+.voice-slider-input {
+  width: 100%;
+  accent-color: #0f172a;
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.switch-row input[type='checkbox'] {
+  width: 1.2rem;
+  height: 1.2rem;
+}
+
+.voice-bottom-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.voice-reset-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.library-description-field {
+  display: grid;
+  gap: 0.25rem;
+  min-width: min(100%, 420px);
+  flex: 1;
+}
+
+.library-description-field input,
+.elevenlabs-library-item select {
+  border: 1px solid #3f3f46;
+  border-radius: 0.6rem;
+  background: #18181b;
+  color: #fafafa;
+  padding: 0.45rem 0.55rem;
+}
+
+.elevenlabs-library-panel {
+  grid-column: 1 / -1;
+}
+
+.elevenlabs-library-list {
+  display: grid;
+  gap: 0.8rem;
+  margin-top: 0.85rem;
+}
+
+.elevenlabs-library-item {
+  border: 1px solid #27272a;
+  border-radius: 0.75rem;
+  background: #18181b;
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.elevenlabs-history-list {
+  display: grid;
+  gap: 0.8rem;
+  margin-top: 1rem;
+  max-height: 70vh;
+  overflow: auto;
+  padding-right: 0.25rem;
+}
+
+.elevenlabs-history-item {
+  border: 1px solid #27272a;
+  border-radius: 0.75rem;
+  background: #18181b;
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.elevenlabs-history-text {
+  color: #f4f4f5;
+  white-space: pre-wrap;
+  margin: 0;
+}
+
+.elevenlabs-history-meta {
+  color: #a1a1aa;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.elevenlabs-history-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+
+.elevenlabs-history-filters label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+}
+
+.elevenlabs-history-filters input,
+.elevenlabs-history-filters select {
+  border: 1px solid #3f3f46;
+  border-radius: 0.6rem;
+  background: #18181b;
+  color: #fafafa;
+  padding: 0.45rem 0.55rem;
+}
+
 @media (max-width: 1100px) {
   .editor-main {
     grid-template-columns: 1fr;
@@ -453,5 +693,13 @@ body {
 
   .transport {
     grid-template-columns: repeat(3, auto) 1fr;
+  }
+
+  .elevenlabs-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .elevenlabs-history-filters {
+    grid-template-columns: 1fr;
   }
 }
