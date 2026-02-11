@@ -18,6 +18,7 @@ interface StoredClip {
   volume: number
   muted: boolean
   previousVolume: number
+  speed: number
 }
 
 interface Clip extends StoredClip {
@@ -125,6 +126,9 @@ const IMAGE_DEFAULT_DURATION = 3
 const PX_PER_SECOND = 60
 const TIMELINE_LABEL_WIDTH = 72
 const MIN_CLIP_DURATION = 0.2
+const MIN_VIDEO_SPEED = 0.25
+const MAX_VIDEO_SPEED = 16
+const PREVIEW_PLAYBACK_RESYNC_TOLERANCE = 0.6
 const CAPTION_WINDOW_WORD_COUNT = 3
 const CAPTION_ACTIVE_BG_COLOR = '#7C3AED'
 const CAPTION_SIZE_MIN = 50
@@ -314,6 +318,13 @@ function clampCaptionSizePercent(value: number, fallback: number): number {
     return fallback
   }
   return Math.min(CAPTION_SIZE_MAX, Math.max(CAPTION_SIZE_MIN, Math.round(value)))
+}
+
+function clampVideoSpeed(value: number, fallback = 1): number {
+  if (!Number.isFinite(value)) {
+    return fallback
+  }
+  return Math.min(MAX_VIDEO_SPEED, Math.max(MIN_VIDEO_SPEED, value))
 }
 
 function parseCaptionLetterCase(value: unknown): CaptionLetterCase {
@@ -613,6 +624,7 @@ async function restoreDraft(projectId: string): Promise<void> {
         sourceDuration: Number.isFinite(storedClip.sourceDuration) ? storedClip.sourceDuration : storedClip.duration,
         muted: Boolean(storedClip.muted),
         previousVolume: Number.isFinite(storedClip.previousVolume) ? storedClip.previousVolume : 1,
+        speed: storedClip.kind === 'video' ? clampVideoSpeed(storedClip.speed, 1) : 1,
         url: createUrl(fileRecord.blob)
       })
     }
@@ -697,7 +709,7 @@ async function saveDraft(): Promise<void> {
     name: currentProject?.name ?? 'Untitled Project',
     createdAt: currentProject?.createdAt ?? now,
     updatedAt: now,
-    clips: clips.value.map(({ id, fileId, name, kind, start, duration, sourceOffset, sourceDuration, volume, muted, previousVolume }) => ({
+    clips: clips.value.map(({ id, fileId, name, kind, start, duration, sourceOffset, sourceDuration, volume, muted, previousVolume, speed }) => ({
       id,
       fileId,
       name,
@@ -708,7 +720,8 @@ async function saveDraft(): Promise<void> {
       sourceDuration,
       volume,
       muted,
-      previousVolume
+      previousVolume,
+      speed: kind === 'video' ? clampVideoSpeed(speed, 1) : 1
     })),
     captions: captions.value.map(caption => ({
       id: caption.id,
@@ -834,6 +847,7 @@ async function importMedia(event: Event): Promise<void> {
       volume: 1,
       muted: false,
       previousVolume: 1,
+      speed: 1,
       url
     })
   }
@@ -886,6 +900,7 @@ async function importSavedAudioFromLibrary(): Promise<void> {
       volume: 1,
       muted: false,
       previousVolume: 1,
+      speed: 1,
       url
     }
 
@@ -937,6 +952,23 @@ function safePlay(element: HTMLMediaElement): void {
   }
 }
 
+function getClipPlaybackRate(clip: Clip): number {
+  if (clip.kind !== 'video') {
+    return 1
+  }
+  return clampVideoSpeed(clip.speed, 1)
+}
+
+function getClipMaxTimelineDuration(clip: Clip): number {
+  if (clip.kind === 'image') {
+    return 120
+  }
+  if (clip.kind === 'video') {
+    return Math.max(MIN_CLIP_DURATION, (clip.sourceDuration - clip.sourceOffset) / getClipPlaybackRate(clip))
+  }
+  return Math.max(MIN_CLIP_DURATION, clip.sourceDuration - clip.sourceOffset)
+}
+
 function getOutputVolume(clip: Clip): number {
   if (clip.kind === 'video' && clip.muted) {
     return 0
@@ -959,11 +991,15 @@ function syncPreviewMedia(forceSeek = false): void {
     }
 
     element.volume = getOutputVolume(clip)
+    element.playbackRate = getClipPlaybackRate(clip)
 
     if (inRange(timelineTime, clip.start, clip.duration)) {
-      const localTime = timelineTime - clip.start + clip.sourceOffset
+      const localTime = (timelineTime - clip.start) * getClipPlaybackRate(clip) + clip.sourceOffset
 
-      if (forceSeek || Math.abs(element.currentTime - localTime) > 0.2) {
+      const shouldSeek = forceSeek
+        || !isPlaying.value
+        || Math.abs(element.currentTime - localTime) > PREVIEW_PLAYBACK_RESYNC_TOLERANCE
+      if (shouldSeek) {
         element.currentTime = localTime
       }
 
@@ -988,7 +1024,10 @@ function syncPreviewMedia(forceSeek = false): void {
     if (inRange(timelineTime, clip.start, clip.duration)) {
       const localTime = timelineTime - clip.start + clip.sourceOffset
 
-      if (forceSeek || Math.abs(element.currentTime - localTime) > 0.2) {
+      const shouldSeek = forceSeek
+        || !isPlaying.value
+        || Math.abs(element.currentTime - localTime) > PREVIEW_PLAYBACK_RESYNC_TOLERANCE
+      if (shouldSeek) {
         element.currentTime = localTime
       }
 
@@ -1093,7 +1132,7 @@ function removeOverlay(id: string): void {
   }
 }
 
-function updateSelectedClipField(field: 'start' | 'duration' | 'volume' | 'sourceOffset', value: string | number): void {
+function updateSelectedClipField(field: 'start' | 'duration' | 'volume' | 'sourceOffset' | 'speed', value: string | number): void {
   if (!selectedClip.value) {
     return
   }
@@ -1106,9 +1145,7 @@ function updateSelectedClipField(field: 'start' | 'duration' | 'volume' | 'sourc
   if (field === 'start') {
     selectedClip.value.start = Math.max(0, parsed)
   } else if (field === 'duration') {
-    const maxDuration = selectedClip.value.kind === 'image'
-      ? Math.max(MIN_CLIP_DURATION, parsed)
-      : Math.max(MIN_CLIP_DURATION, selectedClip.value.sourceDuration - selectedClip.value.sourceOffset)
+    const maxDuration = getClipMaxTimelineDuration(selectedClip.value)
     selectedClip.value.duration = Math.min(Math.max(MIN_CLIP_DURATION, parsed), maxDuration)
   } else if (field === 'sourceOffset') {
     if (selectedClip.value.kind === 'image') {
@@ -1120,7 +1157,16 @@ function updateSelectedClipField(field: 'start' | 'duration' | 'volume' | 'sourc
     selectedClip.value.sourceOffset = nextOffset
     selectedClip.value.duration = Math.min(
       selectedClip.value.duration,
-      Math.max(MIN_CLIP_DURATION, selectedClip.value.sourceDuration - selectedClip.value.sourceOffset)
+      getClipMaxTimelineDuration(selectedClip.value)
+    )
+  } else if (field === 'speed') {
+    if (selectedClip.value.kind !== 'video') {
+      return
+    }
+    selectedClip.value.speed = clampVideoSpeed(parsed, selectedClip.value.speed || 1)
+    selectedClip.value.duration = Math.min(
+      selectedClip.value.duration,
+      getClipMaxTimelineDuration(selectedClip.value)
     )
   } else {
     selectedClip.value.volume = Math.max(0, Math.min(2, parsed))
@@ -1252,9 +1298,7 @@ function onPointerMove(event: PointerEvent): void {
   }
 
   if (dragState.value.mode === 'trim-right') {
-    const maxDur = clip.kind === 'image'
-      ? 120
-      : Math.max(MIN_CLIP_DURATION, clip.sourceDuration - clip.sourceOffset)
+    const maxDur = getClipMaxTimelineDuration(clip)
     clip.duration = Math.min(maxDur, Math.max(MIN_CLIP_DURATION, toStepTime(dragState.value.initialDuration + deltaSec)))
     return
   }
@@ -1563,6 +1607,7 @@ async function renderProjectToWebm(onProgress: (value: number) => void): Promise
       media.playsInline = true
       media.crossOrigin = 'anonymous'
       media.volume = getOutputVolume(clip)
+      media.playbackRate = getClipPlaybackRate(clip)
       await media.play().catch(() => {})
       media.pause()
       media.currentTime = clip.sourceOffset
@@ -1646,10 +1691,11 @@ async function renderProjectToWebm(onProgress: (value: number) => void): Promise
         }
 
         if (inRange(elapsed, clip.start, clip.duration)) {
-          const local = elapsed - clip.start + clip.sourceOffset
+          const local = (elapsed - clip.start) * getClipPlaybackRate(clip) + clip.sourceOffset
           if (Math.abs(media.currentTime - local) > 0.3) {
             media.currentTime = local
           }
+          media.playbackRate = getClipPlaybackRate(clip)
           await media.play().catch(() => {})
         } else {
           media.pause()
@@ -2220,6 +2266,17 @@ async function generateCaptions(): Promise<void> {
               step="0.1"
               :value="selectedClip.duration"
               @input="updateSelectedClipField('duration', ($event.target as HTMLInputElement).value)"
+            >
+          </label>
+          <label v-if="selectedClip.kind === 'video'">
+            Speed (0.25 - 16x)
+            <input
+              type="number"
+              :min="MIN_VIDEO_SPEED"
+              :max="MAX_VIDEO_SPEED"
+              step="0.05"
+              :value="selectedClip.speed"
+              @input="updateSelectedClipField('speed', ($event.target as HTMLInputElement).value)"
             >
           </label>
           <label v-if="selectedClip.kind !== 'image'">
