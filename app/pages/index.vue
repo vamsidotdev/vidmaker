@@ -19,6 +19,9 @@ interface StoredClip {
   muted: boolean
   previousVolume: number
   speed: number
+  cropZoom?: number
+  cropX?: number
+  cropY?: number
 }
 
 interface Clip extends StoredClip {
@@ -128,6 +131,8 @@ const TIMELINE_LABEL_WIDTH = 72
 const MIN_CLIP_DURATION = 0.2
 const MIN_VIDEO_SPEED = 0.25
 const MAX_VIDEO_SPEED = 16
+const MIN_VIDEO_CROP_ZOOM = 1
+const MAX_VIDEO_CROP_ZOOM = 4
 const PREVIEW_PLAYBACK_RESYNC_TOLERANCE = 0.6
 const CAPTION_WINDOW_WORD_COUNT = 3
 const CAPTION_ACTIVE_BG_COLOR = '#7C3AED'
@@ -325,6 +330,32 @@ function clampVideoSpeed(value: number, fallback = 1): number {
     return fallback
   }
   return Math.min(MAX_VIDEO_SPEED, Math.max(MIN_VIDEO_SPEED, value))
+}
+
+function clampCropOffset(value: number, fallback = 0): number {
+  if (!Number.isFinite(value)) {
+    return fallback
+  }
+  return Math.min(100, Math.max(-100, value))
+}
+
+function clampCropZoom(value: number, fallback = 1): number {
+  if (!Number.isFinite(value)) {
+    return fallback
+  }
+  return Math.min(MAX_VIDEO_CROP_ZOOM, Math.max(MIN_VIDEO_CROP_ZOOM, value))
+}
+
+function getClipCropSettings(clip: Clip | null | undefined): { zoom: number, x: number, y: number } {
+  if (!clip || clip.kind !== 'video') {
+    return { zoom: 1, x: 0, y: 0 }
+  }
+
+  return {
+    zoom: clampCropZoom(clip.cropZoom ?? 1, 1),
+    x: clampCropOffset(clip.cropX ?? 0, 0),
+    y: clampCropOffset(clip.cropY ?? 0, 0)
+  }
 }
 
 function parseCaptionLetterCase(value: unknown): CaptionLetterCase {
@@ -625,6 +656,9 @@ async function restoreDraft(projectId: string): Promise<void> {
         muted: Boolean(storedClip.muted),
         previousVolume: Number.isFinite(storedClip.previousVolume) ? storedClip.previousVolume : 1,
         speed: storedClip.kind === 'video' ? clampVideoSpeed(storedClip.speed, 1) : 1,
+        cropZoom: storedClip.kind === 'video' ? clampCropZoom(storedClip.cropZoom ?? 1, 1) : 1,
+        cropX: storedClip.kind === 'video' ? clampCropOffset(storedClip.cropX ?? 0, 0) : 0,
+        cropY: storedClip.kind === 'video' ? clampCropOffset(storedClip.cropY ?? 0, 0) : 0,
         url: createUrl(fileRecord.blob)
       })
     }
@@ -709,7 +743,7 @@ async function saveDraft(): Promise<void> {
     name: currentProject?.name ?? 'Untitled Project',
     createdAt: currentProject?.createdAt ?? now,
     updatedAt: now,
-    clips: clips.value.map(({ id, fileId, name, kind, start, duration, sourceOffset, sourceDuration, volume, muted, previousVolume, speed }) => ({
+    clips: clips.value.map(({ id, fileId, name, kind, start, duration, sourceOffset, sourceDuration, volume, muted, previousVolume, speed, cropZoom, cropX, cropY }) => ({
       id,
       fileId,
       name,
@@ -721,7 +755,10 @@ async function saveDraft(): Promise<void> {
       volume,
       muted,
       previousVolume,
-      speed: kind === 'video' ? clampVideoSpeed(speed, 1) : 1
+      speed: kind === 'video' ? clampVideoSpeed(speed, 1) : 1,
+      cropZoom: kind === 'video' ? clampCropZoom(cropZoom ?? 1, 1) : 1,
+      cropX: kind === 'video' ? clampCropOffset(cropX ?? 0, 0) : 0,
+      cropY: kind === 'video' ? clampCropOffset(cropY ?? 0, 0) : 0
     })),
     captions: captions.value.map(caption => ({
       id: caption.id,
@@ -848,6 +885,9 @@ async function importMedia(event: Event): Promise<void> {
       muted: false,
       previousVolume: 1,
       speed: 1,
+      cropZoom: 1,
+      cropX: 0,
+      cropY: 0,
       url
     })
   }
@@ -901,6 +941,9 @@ async function importSavedAudioFromLibrary(): Promise<void> {
       muted: false,
       previousVolume: 1,
       speed: 1,
+      cropZoom: 1,
+      cropX: 0,
+      cropY: 0,
       url
     }
 
@@ -975,6 +1018,14 @@ function getOutputVolume(clip: Clip): number {
   }
 
   return clip.volume
+}
+
+function getPreviewMediaStyle(clip: Clip): Record<string, string> {
+  const crop = getClipCropSettings(clip)
+  return {
+    objectPosition: `${50 + (crop.x / 2)}% ${50 + (crop.y / 2)}%`,
+    transform: `scale(${crop.zoom})`
+  }
 }
 
 function syncPreviewMedia(forceSeek = false): void {
@@ -1132,7 +1183,7 @@ function removeOverlay(id: string): void {
   }
 }
 
-function updateSelectedClipField(field: 'start' | 'duration' | 'volume' | 'sourceOffset' | 'speed', value: string | number): void {
+function updateSelectedClipField(field: 'start' | 'duration' | 'volume' | 'sourceOffset' | 'speed' | 'cropZoom' | 'cropX' | 'cropY', value: string | number): void {
   if (!selectedClip.value) {
     return
   }
@@ -1168,6 +1219,21 @@ function updateSelectedClipField(field: 'start' | 'duration' | 'volume' | 'sourc
       selectedClip.value.duration,
       getClipMaxTimelineDuration(selectedClip.value)
     )
+  } else if (field === 'cropZoom') {
+    if (selectedClip.value.kind !== 'video') {
+      return
+    }
+    selectedClip.value.cropZoom = clampCropZoom(parsed, selectedClip.value.cropZoom ?? 1)
+  } else if (field === 'cropX') {
+    if (selectedClip.value.kind !== 'video') {
+      return
+    }
+    selectedClip.value.cropX = clampCropOffset(parsed, selectedClip.value.cropX ?? 0)
+  } else if (field === 'cropY') {
+    if (selectedClip.value.kind !== 'video') {
+      return
+    }
+    selectedClip.value.cropY = clampCropOffset(parsed, selectedClip.value.cropY ?? 0)
   } else {
     selectedClip.value.volume = Math.max(0, Math.min(2, parsed))
     if (selectedClip.value.kind === 'video') {
@@ -1178,6 +1244,17 @@ function updateSelectedClipField(field: 'start' | 'duration' | 'volume' | 'sourc
     }
   }
 
+  syncPreviewMedia(true)
+}
+
+function resetSelectedVideoCrop(): void {
+  if (!selectedClip.value || selectedClip.value.kind !== 'video') {
+    return
+  }
+
+  selectedClip.value.cropZoom = 1
+  selectedClip.value.cropX = 0
+  selectedClip.value.cropY = 0
   syncPreviewMedia(true)
 }
 
@@ -1555,7 +1632,8 @@ function drawCover(
   context: CanvasRenderingContext2D,
   source: CanvasImageSource,
   width: number,
-  height: number
+  height: number,
+  crop: { zoom: number, x: number, y: number } = { zoom: 1, x: 0, y: 0 }
 ): void {
   const sourceWidth = source instanceof HTMLVideoElement ? source.videoWidth : source instanceof HTMLImageElement ? source.naturalWidth : width
   const sourceHeight = source instanceof HTMLVideoElement ? source.videoHeight : source instanceof HTMLImageElement ? source.naturalHeight : height
@@ -1564,11 +1642,13 @@ function drawCover(
     return
   }
 
-  const scale = Math.max(width / sourceWidth, height / sourceHeight)
+  const scale = Math.max(width / sourceWidth, height / sourceHeight) * clampCropZoom(crop.zoom, 1)
   const drawWidth = sourceWidth * scale
   const drawHeight = sourceHeight * scale
-  const dx = (width - drawWidth) / 2
-  const dy = (height - drawHeight) / 2
+  const overflowX = Math.max(0, drawWidth - width)
+  const overflowY = Math.max(0, drawHeight - height)
+  const dx = ((width - drawWidth) / 2) - ((overflowX / 2) * (clampCropOffset(crop.x, 0) / 100))
+  const dy = ((height - drawHeight) / 2) - ((overflowY / 2) * (clampCropOffset(crop.y, 0) / 100))
   context.drawImage(source, dx, dy, drawWidth, drawHeight)
 }
 
@@ -1727,7 +1807,7 @@ async function renderProjectToWebm(onProgress: (value: number) => void): Promise
       if (visual?.kind === 'video') {
         const media = exportVideoElements.get(visual.id)
         if (media && media.readyState >= 2) {
-          drawCover(baseFrameContext, media, width, height)
+          drawCover(baseFrameContext, media, width, height, getClipCropSettings(visual))
         }
       } else if (visual?.kind === 'image') {
         const image = exportImages.get(visual.id)
@@ -2173,6 +2253,7 @@ async function generateCaptions(): Promise<void> {
               playsinline
               preload="metadata"
               class="preview-media"
+              :style="getPreviewMediaStyle(clip)"
             />
             <img
               v-for="clip in visualClips"
@@ -2279,6 +2360,46 @@ async function generateCaptions(): Promise<void> {
               @input="updateSelectedClipField('speed', ($event.target as HTMLInputElement).value)"
             >
           </label>
+          <label v-if="selectedClip.kind === 'video'">
+            Crop zoom (1 - 4x)
+            <input
+              type="number"
+              :min="MIN_VIDEO_CROP_ZOOM"
+              :max="MAX_VIDEO_CROP_ZOOM"
+              step="0.05"
+              :value="selectedClip.cropZoom ?? 1"
+              @input="updateSelectedClipField('cropZoom', ($event.target as HTMLInputElement).value)"
+            >
+          </label>
+          <label v-if="selectedClip.kind === 'video'">
+            Move X (-100 to 100)
+            <input
+              type="number"
+              min="-100"
+              max="100"
+              step="1"
+              :value="selectedClip.cropX ?? 0"
+              @input="updateSelectedClipField('cropX', ($event.target as HTMLInputElement).value)"
+            >
+          </label>
+          <label v-if="selectedClip.kind === 'video'">
+            Move Y (-100 to 100)
+            <input
+              type="number"
+              min="-100"
+              max="100"
+              step="1"
+              :value="selectedClip.cropY ?? 0"
+              @input="updateSelectedClipField('cropY', ($event.target as HTMLInputElement).value)"
+            >
+          </label>
+          <button
+            v-if="selectedClip.kind === 'video'"
+            class="btn"
+            @click="resetSelectedVideoCrop"
+          >
+            Reset Crop
+          </button>
           <label v-if="selectedClip.kind !== 'image'">
             Trim start in source (seconds)
             <input
