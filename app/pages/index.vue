@@ -129,6 +129,7 @@ const CAPTION_WINDOW_WORD_COUNT = 3
 const CAPTION_ACTIVE_BG_COLOR = '#7C3AED'
 const CAPTION_SIZE_MIN = 50
 const CAPTION_SIZE_MAX = 220
+const CAPTION_PREVIEW_REFERENCE_WIDTH = 360
 
 const filePicker = ref<HTMLInputElement | null>(null)
 const currentView = ref<'projects' | 'editor'>('projects')
@@ -387,6 +388,11 @@ function toggleSavedAudioImporter(): void {
 
 function getCaptionScaleFactor(): number {
   return clampCaptionSizePercent(captionSizePercent.value, 100) / 100
+}
+
+function getCanvasCaptionScaleFactor(canvasWidth: number): number {
+  const widthScale = canvasWidth / CAPTION_PREVIEW_REFERENCE_WIDTH
+  return getCaptionScaleFactor() * widthScale
 }
 
 function scaleFontSize(font: string, scale: number): string {
@@ -1431,7 +1437,7 @@ function drawCaptionOnCanvas(
   const y = (clampPercent(captionPositionY.value, 88) / 100) * height
   context.textAlign = 'left'
   context.textBaseline = 'middle'
-  const scale = getCaptionScaleFactor()
+  const scale = getCanvasCaptionScaleFactor(width)
   context.font = scaleFontSize(style.font, scale)
   context.lineWidth = style.strokeWidth * scale
   context.strokeStyle = style.stroke
